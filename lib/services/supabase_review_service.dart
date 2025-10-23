@@ -25,30 +25,23 @@ class SupabaseReviewService {
             review_images(*)
           ''')
           .eq('ma_san_pham', productId)
-          .filter(
-            'ma_danh_gia_cha',
-            'is',
-            null,
-          ); // Only get parent reviews (not replies)
+          .eq('trang_thai', 1) // ✅ chỉ lấy đánh giá đang hiển thị
+          .filter('ma_danh_gia_cha', 'is', null); // chỉ lấy đánh giá cha
 
-      // Apply rating filter if specified
+      // Lọc theo sao nếu có
       if (ratingFilter != null && ratingFilter > 0) {
         query = query.eq('diem_danh_gia', ratingFilter);
       }
 
-      // Apply order
-      final reviewsResponse = await query.order(
-        'thoi_gian_tao',
-        ascending: false,
-      );
+      final reviewsResponse =
+          await query.order('thoi_gian_tao', ascending: false);
       print('[DEBUG] Found ${reviewsResponse.length} parent reviews');
 
-      // Get replies for each parent review
       final List<Review> result = [];
       for (final reviewData in reviewsResponse) {
         final parentReview = Review.fromJson(reviewData);
 
-        // Get replies for this parent review
+        // Lấy phản hồi con (reply)
         final repliesResponse = await _client
             .from('reviews')
             .select('''
@@ -57,31 +50,30 @@ class SupabaseReviewService {
               review_images(*)
             ''')
             .eq('ma_danh_gia_cha', parentReview.maDanhGia)
+            .eq('trang_thai', 1) // ✅ chỉ lấy phản hồi hiển thị
             .order('thoi_gian_tao', ascending: true);
 
-        final replies =
-            repliesResponse
-                .map((replyData) => Review.fromJson(replyData))
-                .toList();
+        final replies = repliesResponse
+            .map((replyData) => Review.fromJson(replyData))
+            .toList();
 
-        // Create parent review with replies
-        final parentWithReplies = Review(
-          maDanhGia: parentReview.maDanhGia,
-          maSanPham: parentReview.maSanPham,
-          maNguoiDung: parentReview.maNguoiDung,
-          tenNguoiDung: parentReview.tenNguoiDung,
-          avatarNguoiDung: parentReview.avatarNguoiDung,
-          diemDanhGia: parentReview.diemDanhGia,
-          noiDungDanhGia: parentReview.noiDungDanhGia,
-          ngayTao: parentReview.ngayTao,
-          ngaySua: parentReview.ngaySua,
-          trangThaiHienThi: parentReview.trangThaiHienThi,
-          hinhAnh: parentReview.hinhAnh,
-          maDanhGiaCha: parentReview.maDanhGiaCha,
-          replies: replies,
+        result.add(
+          Review(
+            maDanhGia: parentReview.maDanhGia,
+            maSanPham: parentReview.maSanPham,
+            maNguoiDung: parentReview.maNguoiDung,
+            tenNguoiDung: parentReview.tenNguoiDung,
+            avatarNguoiDung: parentReview.avatarNguoiDung,
+            diemDanhGia: parentReview.diemDanhGia,
+            noiDungDanhGia: parentReview.noiDungDanhGia,
+            ngayTao: parentReview.ngayTao,
+            ngaySua: parentReview.ngaySua,
+            trangThaiHienThi: parentReview.trangThaiHienThi,
+            hinhAnh: parentReview.hinhAnh,
+            maDanhGiaCha: parentReview.maDanhGiaCha,
+            replies: replies,
+          ),
         );
-
-        result.add(parentWithReplies);
       }
 
       return result;
@@ -101,11 +93,8 @@ class SupabaseReviewService {
           .from('reviews')
           .select('diem_danh_gia')
           .eq('ma_san_pham', productId)
-          .filter(
-            'ma_danh_gia_cha',
-            'is',
-            null,
-          ); // only parent reviews count toward stats
+          .eq('trang_thai', 1) // ✅ chỉ tính review đang hiển thị
+          .filter('ma_danh_gia_cha', 'is', null);
 
       if (response.isEmpty) {
         return {
@@ -115,17 +104,15 @@ class SupabaseReviewService {
         };
       }
 
-      final ratings =
-          response
-              .map<int>((data) => (data['diem_danh_gia'] as num).toInt())
-              .toList();
+      final ratings = response
+          .map<int>((data) => (data['diem_danh_gia'] as num).toInt())
+          .toList();
       final totalReviews = ratings.length;
       final averageRating = ratings.reduce((a, b) => a + b) / totalReviews;
 
-      // Tính phân phối điểm đánh giá
       final ratingDistribution = <int, int>{};
       for (int i = 1; i <= 5; i++) {
-        ratingDistribution[i] = ratings.where((rating) => rating == i).length;
+        ratingDistribution[i] = ratings.where((r) => r == i).length;
       }
 
       return {
@@ -150,7 +137,7 @@ class SupabaseReviewService {
     required int rating,
     required String comment,
     List<XFile>? images,
-    int? parentReviewId, // For replies
+    int? parentReviewId,
   }) async {
     try {
       print('[DEBUG] Adding review for product: $productId');
@@ -162,14 +149,13 @@ class SupabaseReviewService {
         'ma_san_pham': productId,
         'ma_nguoi_dung': userId,
         'noi_dung_danh_gia': comment,
+        'trang_thai': 1, // ✅ khi thêm mới, trạng thái mặc định = 1
         if (parentReviewId != null) 'ma_danh_gia_cha': parentReviewId,
       };
-      // Only parent reviews carry a star rating; replies should not affect ratings
+
       if (parentReviewId == null) {
         reviewData['diem_danh_gia'] = rating;
       }
-
-      print('[DEBUG] Review data: $reviewData');
 
       final response =
           await _client.from('reviews').insert(reviewData).select();
@@ -188,7 +174,7 @@ class SupabaseReviewService {
     }
   }
 
-  // Upload review images
+  // Upload hình ảnh
   static Future<void> _uploadReviewImages(
     int reviewId,
     List<XFile> images,
@@ -202,11 +188,8 @@ class SupabaseReviewService {
             'review_${reviewId}_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
         final filePath = 'reviews/$fileName';
 
-        // Upload to Supabase Storage
         final fileBytes = await image.readAsBytes();
-        final uploadRes = await _client.storage
-            .from(_bucket)
-            .uploadBinary(
+        final uploadRes = await _client.storage.from(_bucket).uploadBinary(
               filePath,
               fileBytes,
               fileOptions: const FileOptions(
@@ -216,16 +199,13 @@ class SupabaseReviewService {
             );
         print('[DEBUG] Storage upload result: $uploadRes');
 
-        // Get public URL
         final imageUrl = _client.storage.from(_bucket).getPublicUrl(filePath);
         print('[DEBUG] Public URL: $imageUrl');
 
-        // Save to review_images table
-        final insertImg =
-            await _client.from('review_images').insert({
-              'ma_danh_gia': reviewId,
-              'duong_dan_anh': imageUrl,
-            }).select();
+        final insertImg = await _client.from('review_images').insert({
+          'ma_danh_gia': reviewId,
+          'duong_dan_anh': imageUrl,
+        }).select();
         print('[DEBUG] Image $i inserted: $insertImg');
       }
     } catch (e, stackTrace) {
@@ -257,12 +237,12 @@ class SupabaseReviewService {
     }
   }
 
-  // Xóa bình luận (ẩn khỏi hiển thị)
+  // Ẩn bình luận (xóa mềm)
   static Future<bool> deleteReview(int reviewId) async {
     try {
       await _client
           .from('reviews')
-          .update({'trang_thai_hien_thi': false})
+          .update({'trang_thai': 0}) // ✅ ẩn review
           .eq('ma_danh_gia', reviewId);
 
       return true;
